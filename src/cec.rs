@@ -1,6 +1,8 @@
 use libc;
 use libc::c_void;
-use std::{mem, result};
+use std::{mem, result, ptr, fmt, ffi};
+use std::iter::Iterator;
+use tv;
 
 const CEC_MAX_DATA_PACKET_SIZE: usize = 16 * 4;
 const CEC_VERSION_MAJOR: u32 = 3;
@@ -11,11 +13,14 @@ const CEC_VERSION_CURRENT: u32 = (CEC_VERSION_MAJOR << 16) | (CEC_VERSION_MINOR 
 
 type LibcecConnectionT = *mut c_void;
 
-type Result<T> = result::Result<T, CecError>;
+pub type Result<T> = result::Result<T, CecError>;
 
 #[derive(Debug)]
 pub enum CecError {
-    InitFailed
+    InitFailed,
+    FindAdaptersFailed,
+    NoAdapterFound,
+    OpenFailed
 }
 
 #[repr(C)]
@@ -55,7 +60,7 @@ enum CecLogLevel {
 
 #[repr(C)]
 struct CecLogMessage {
-    message: *const libc::wchar_t,
+    message: *const libc::c_char,
     level: CecLogLevel,
     time: i64
 }
@@ -64,7 +69,7 @@ struct CecLogMessage {
 #[allow(dead_code)]
 enum CecUserControlCode {
     SELECT = 0x00
-    // TODO: Add more
+    // TODO: Add morehttps://github.com/Pulse-Eight/libcec
 }
 
 #[repr(C)]
@@ -175,7 +180,7 @@ enum CecAdapterType {
 #[allow(dead_code)]
 struct LibcecConfiguration {
     client_version: u32,
-    str_device_name: [libc::wchar_t; 13],
+    str_device_name: [libc::c_char; 13],
     device_types: CecDeviceTypeList,
     b_autodetect_address: u8,
     i_physical_address: u16,
@@ -192,7 +197,7 @@ struct LibcecConfiguration {
     callbacks: *mut ICECCallbacks,
     logical_addresses: CecLogicalAddresses,
     i_firmware_version: u16,
-    str_device_language: [libc::wchar_t; 3],
+    str_device_language: [libc::c_char; 3],
     i_firmware_build_date: u32,
     b_monitor_only: u8,
     cec_version: CecVersion,
@@ -205,13 +210,54 @@ struct LibcecConfiguration {
     b_auto_wake_avr: u8
 }
 
+#[repr(C)]
+#[derive(Copy)]
+struct CecAdapter {
+    path: [libc::c_char; 1024],
+    comm: [libc::c_char; 1024]
+}
+
+impl CecAdapter {
+    fn empty() -> CecAdapter {
+        CecAdapter {
+            path: [0; 1024],
+            comm: [0; 1024]
+        }
+    }
+}
+
+impl Clone for CecAdapter {
+    fn clone(&self) -> CecAdapter {
+        CecAdapter {
+            path: self.path,
+            comm: self.comm
+        }
+    }
+}
+
+impl fmt::Debug for CecAdapter {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        unsafe {
+            fmt.debug_struct("CecAdapter")
+                .field("path", &ffi::CStr::from_ptr(self.path.as_ptr()))
+                .field("comm", &ffi::CStr::from_ptr(self.comm.as_ptr()))
+                .finish()
+        }
+    }
+}
+
 #[link(name = "cec")]
 extern {
     fn libcec_initialise(configuration: *mut LibcecConfiguration) -> LibcecConnectionT;
     fn libcec_destroy(connection: LibcecConnectionT);
+    fn libcec_open(connection: LibcecConnectionT, str_port: *const libc::c_char, i_timeout: u32) -> libc::c_int;
     fn libcec_close(connection: LibcecConnectionT);
 
     fn libcec_init_video_standalone(connection: LibcecConnectionT);
+    fn libcec_find_adapters(connection: LibcecConnectionT, device_list: *mut CecAdapter, i_buf_size: u8, str_device_path: *mut libc::c_char) -> i8;
+
+    fn libcec_power_on_devices(connection: LibcecConnectionT, cec_logical_address: CecLogicalAddress) -> libc::c_int;
+    fn libcec_standby_devices(connection: LibcecConnectionT, cec_logical_address: CecLogicalAddress) -> libc::c_int;
 
     fn libcec_clear_configuration(configuration: *mut LibcecConfiguration);
 }
@@ -229,6 +275,7 @@ impl LibcecConfiguration {
 
 pub struct Connection {
     conn: LibcecConnectionT,
+    #[allow(dead_code)]
     config: LibcecConfiguration
 }
 
@@ -252,7 +299,48 @@ impl Connection {
         unsafe {
             libcec_init_video_standalone(self.conn);
         }
+        let adapters = self.find_adapters()?;
+        let adapter = adapters.first().ok_or(CecError::NoAdapterFound)?;
+        unsafe {
+            if libcec_open(self.conn, adapter.comm.as_ptr(), 5000) == 0 {
+                return Err(CecError::OpenFailed)
+            }
+        }
         Ok(())
+    }
+
+    fn find_adapters(&mut self) -> Result<Vec<CecAdapter>> {
+        let mut buf = [CecAdapter::empty(); 10];
+        let adapter_count = unsafe {
+          libcec_find_adapters(self.conn, buf.as_mut_ptr(), buf.len() as u8, ptr::null_mut())
+        };
+        if adapter_count >= 0 {
+            Ok(buf.into_iter().take(adapter_count as usize).map(|x| *x).collect())
+        } else {
+            Err(CecError::FindAdaptersFailed)
+        }
+    }
+}
+
+impl tv::TVController for Connection {
+    fn turn_on_tv(&mut self) -> tv::Result<()> {
+        unsafe {
+            if libcec_power_on_devices(self.conn, CecLogicalAddress::TV) == 0 {
+                Err(tv::TVError::TVControlFailed)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn turn_off_tv(&mut self) -> tv::Result<()> {
+        unsafe {
+            if libcec_standby_devices(self.conn, CecLogicalAddress::TV) == 0 {
+                Err(tv::TVError::TVControlFailed)
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
