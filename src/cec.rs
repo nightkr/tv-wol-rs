@@ -1,6 +1,6 @@
 use libc;
 use libc::c_void;
-use std::{mem, result, ptr, fmt, ffi};
+use std::{mem, result, ptr, fmt, ffi, iter};
 use std::iter::Iterator;
 use tv;
 
@@ -268,6 +268,9 @@ impl LibcecConfiguration {
             let mut config = mem::zeroed::<LibcecConfiguration>();
             libcec_clear_configuration(&mut config);
             config.client_version = CEC_VERSION_CURRENT;
+            config.b_activate_source = 0;
+            config.device_types.types[0] = CecDeviceType::RECORDING_DEVICE;
+            // config.callbacks =
             config
         }
     }
@@ -301,6 +304,7 @@ impl Connection {
         }
         let adapters = self.find_adapters()?;
         let adapter = adapters.first().ok_or(CecError::NoAdapterFound)?;
+        println!("Connecting to {:?}", adapter);
         unsafe {
             if libcec_open(self.conn, adapter.comm.as_ptr(), 5000) == 0 {
                 return Err(CecError::OpenFailed)

@@ -17,7 +17,7 @@ fn init_cec_connection() -> cec::Result<cec::Connection> {
 
 fn init_tv_controller() -> Box<tv::TVController> {
     init_cec_connection().map(|x| Box::new(x) as Box<tv::TVController>).unwrap_or_else(|err| {
-        println!("Unable to connect to {:?}, switching to fake implementation", err);
+        println!("Unable to connect to CEC: {:?}, switching to fake implementation", err);
         Box::new(tv::FakeTVController::new())
     })
 }
