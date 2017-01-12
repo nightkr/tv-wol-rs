@@ -1,6 +1,6 @@
 use libc;
 use libc::c_void;
-use std::{mem, result, ptr, fmt, ffi, iter};
+use std::{mem, result, ptr, fmt, ffi};
 use std::iter::Iterator;
 use tv;
 
@@ -330,6 +330,7 @@ impl tv::TVController for Connection {
     fn turn_on_tv(&mut self) -> tv::Result<()> {
         unsafe {
             if libcec_power_on_devices(self.conn, CecLogicalAddress::TV) == 0 {
+                println!("Huh, unable to turn on the TV...");
                 Err(tv::TVError::TVControlFailed)
             } else {
                 Ok(())
@@ -340,6 +341,7 @@ impl tv::TVController for Connection {
     fn turn_off_tv(&mut self) -> tv::Result<()> {
         unsafe {
             if libcec_standby_devices(self.conn, CecLogicalAddress::TV) == 0 {
+                println!("Huh, unable to turn off the TV...");
                 Err(tv::TVError::TVControlFailed)
             } else {
                 Ok(())
