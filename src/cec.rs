@@ -144,13 +144,37 @@ struct CecCommand {
 
 #[repr(C)]
 struct ICECCallbacks {
-    log_message: extern fn(*mut c_void, *const CecLogMessage),
-    key_press: extern fn(*mut c_void, *const CecKeypress),
-    command_received: extern fn(*mut c_void, *const CecCommand),
-    configuration_changed: extern fn(*mut c_void, *const LibcecConfiguration),
-    alert: extern fn(*mut c_void, LibcecAlert, LibcecParameter),
-    menu_state_changed: extern fn(*mut c_void, CecMenuState),
+    log_message: extern fn(*mut c_void, *const CecLogMessage) -> libc::c_int,
+    key_press: extern fn(*mut c_void, *const CecKeypress) -> libc::c_int,
+    command_received: extern fn(*mut c_void, *const CecCommand) -> libc::c_int,
+    configuration_changed: extern fn(*mut c_void, *const LibcecConfiguration) -> libc::c_int,
+    alert: extern fn(*mut c_void, LibcecAlert, LibcecParameter) -> libc::c_int,
+    menu_state_changed: extern fn(*mut c_void, CecMenuState) -> libc::c_int,
     source_activated: extern fn(*mut c_void, CecLogicalAddress, u8)
+}
+
+static mut ICECCALLBACKS_DEFAULT: ICECCallbacks = ICECCallbacks {
+    log_message: ICECCallbacks::default_log_message,
+    key_press: ICECCallbacks::default_key_press,
+    command_received: ICECCallbacks::default_command_received,
+    configuration_changed: ICECCallbacks::default_configuration_changed,
+    alert: ICECCallbacks::default_alert,
+    menu_state_changed: ICECCallbacks::default_menu_state_changed,
+    source_activated: ICECCallbacks::default_source_activated
+};
+
+impl ICECCallbacks {
+    extern fn default_log_message(cb_param: *mut c_void, message: *const CecLogMessage) -> libc::c_int {
+        println!("{:?}", message);
+        1
+    }
+
+    extern fn default_key_press(cb_param: *mut c_void, key_press: *const CecKeypress) -> libc::c_int { 0 }
+    extern fn default_command_received(cb_param: *mut c_void, command: *const CecCommand) -> libc::c_int { 0 }
+    extern fn default_configuration_changed(cb_param: *mut c_void, config: *const LibcecConfiguration) -> libc::c_int { 0 }
+    extern fn default_alert(cb_param: *mut c_void, alert: LibcecAlert, param: LibcecParameter) -> libc::c_int { 0 }
+    extern fn default_menu_state_changed(cb_param: *mut c_void, menu_state: CecMenuState) -> libc::c_int { 0 }
+    extern fn default_source_activated(cb_param: *mut c_void, address: CecLogicalAddress, x: u8) {}
 }
 
 #[repr(C)]
@@ -258,19 +282,20 @@ extern {
 
     fn libcec_power_on_devices(connection: LibcecConnectionT, cec_logical_address: CecLogicalAddress) -> libc::c_int;
     fn libcec_standby_devices(connection: LibcecConnectionT, cec_logical_address: CecLogicalAddress) -> libc::c_int;
+    fn libcec_set_inactive_view(connection: LibcecConnectionT) -> libc::c_int;
 
     fn libcec_clear_configuration(configuration: *mut LibcecConfiguration);
 }
 
 impl LibcecConfiguration {
-    fn new() -> LibcecConfiguration {
+    fn new(callbacks: &'static mut ICECCallbacks) -> LibcecConfiguration {
         unsafe {
             let mut config = mem::zeroed::<LibcecConfiguration>();
             libcec_clear_configuration(&mut config);
             config.client_version = CEC_VERSION_CURRENT;
             config.b_activate_source = 0;
             config.device_types.types[0] = CecDeviceType::RECORDING_DEVICE;
-            // config.callbacks =
+            config.callbacks = callbacks;
             config
         }
     }
@@ -284,8 +309,8 @@ pub struct Connection {
 
 impl Connection {
     pub fn new() -> Result<Connection> {
-        let mut config = LibcecConfiguration::new();
         unsafe {
+            let mut config = LibcecConfiguration::new(&mut ICECCALLBACKS_DEFAULT);
             let conn = libcec_initialise(&mut config);
             if conn as usize == 0 {
                 Err(CecError::InitFailed)
@@ -309,6 +334,7 @@ impl Connection {
             if libcec_open(self.conn, adapter.comm.as_ptr(), 5000) == 0 {
                 return Err(CecError::OpenFailed)
             }
+            libcec_set_inactive_view(self.conn);
         }
         Ok(())
     }
