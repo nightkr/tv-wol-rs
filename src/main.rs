@@ -8,6 +8,7 @@ mod avahi;
 use std::{net, thread};
 use std::sync::mpsc;
 use std::io::Read;
+use std::time::Duration;
 
 fn init_cec_connection() -> cec::Result<cec::Connection> {
     let mut conn = cec::Connection::new()?;
@@ -40,12 +41,18 @@ fn main() {
 
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
+            stream.set_read_timeout(Some(Duration::new(10, 0))).unwrap();
             let conn_sender = sender.clone();
             thread::spawn(move || {
                 let sender = conn_sender;
                 sender.send(ConnectionEvent::Connected).unwrap();
                 let mut buf = [0 as u8; 1024];
-                while stream.read(&mut buf).unwrap() != 0 {
+                loop {
+                    match stream.read(&mut buf) {
+                        Ok(0) | Err(_) =>
+                            break,
+                        _ => {}
+                    }
                 }
                 sender.send(ConnectionEvent::Disconnected).unwrap();
             });
